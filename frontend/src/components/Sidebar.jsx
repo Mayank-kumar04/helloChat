@@ -6,6 +6,7 @@ export default function Sidebar({
   openModal,
   localProfiles,
   unreadCounts,
+  onlineUsers,
 }) {
   return (
     <div className="sidebar">
@@ -40,9 +41,18 @@ export default function Sidebar({
               onClick={() => setActiveChat(conn.id)}
             >
               <div
-                style={{ fontSize: "24px", width: "40px", textAlign: "center" }}
+                style={{
+                  position: "relative",
+                  fontSize: "24px",
+                  width: "40px",
+                  textAlign: "center",
+                }}
               >
                 {profile.avatar}
+                {/* Dynamic Status Dot */}
+                <div
+                  className={`status-dot ${onlineUsers.has(conn.id) ? "online" : "offline"}`}
+                ></div>
               </div>
               <div
                 style={{ display: "flex", flexDirection: "column", flex: 1 }}

@@ -44,33 +44,67 @@ app.get("/api/messages/:roomId", async (req, res) => {
 const generateId = () =>
   Math.random().toString(36).substring(2, 8).toUpperCase();
 
+// Global state to track who is currently online
+const onlineUsers = new Set();
+
 io.on("connection", (socket) => {
-  const userId = generateId();
-  socket.emit("your_id", userId);
+  const userId = socket.handshake.query.userId;
+
+  if (!userId) {
+    socket.disconnect();
+    return;
+  }
+
+  // 1. Join personal message room and add to global online set
   socket.join(userId);
-  console.log(`🟢 User connected: ${userId}`);
+  onlineUsers.add(userId);
+  console.log(`🟢 User online: ${userId}`);
+
+  // 2. ONLY broadcast to people who have specifically subscribed to this user
+  socket
+    .to(`presence_${userId}`)
+    .emit("presence_update", { userId, status: "online" });
+
+  // 3. Handle Presence Subscriptions from the Frontend
+  socket.on("subscribe_presence", (targetIds, callback) => {
+    const currentlyOnline = [];
+
+    targetIds.forEach((id) => {
+      // Join the presence room for each contact
+      socket.join(`presence_${id}`);
+      // Check if they are already online right now
+      if (onlineUsers.has(id)) {
+        currentlyOnline.push(id);
+      }
+    });
+
+    // Send back the list of contacts who are currently online
+    if (callback) callback(currentlyOnline);
+  });
 
   // Handle incoming messages
   socket.on("send_private_message", async (data) => {
     const { roomId, targetId, senderId, text } = data;
-
-    // 1. Save to Database
     try {
       const newMessage = new Message({ roomId, senderId, text });
       await newMessage.save();
     } catch (err) {
       console.error("Failed to save message", err);
     }
-
-    // 2. Emit to recipient
-    socket.to(targetId).emit("receive_message", {
-      senderId,
-      text,
-      timestamp: new Date(),
-    });
+    socket
+      .to(targetId)
+      .emit("receive_message", { senderId, text, timestamp: new Date() });
   });
 
-  socket.on("disconnect", () => console.log(`🔴 User disconnected: ${userId}`));
+  // 4. Handle Disconnects privately
+  socket.on("disconnect", () => {
+    console.log(`🔴 User offline: ${userId}`);
+    onlineUsers.delete(userId);
+    // Tell ONLY subscribers they went offline
+    socket
+      .to(`presence_${userId}`)
+      .emit("presence_update", { userId, status: "offline" });
+  });
 });
 
 const PORT = process.env.PORT || 5000;

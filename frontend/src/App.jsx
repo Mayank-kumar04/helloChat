@@ -7,44 +7,82 @@ import ChatWindow from "./components/ChatWindow";
 import AddConnectionModal from "./components/AddConnectionModal";
 import EditProfileModal from "./components/EditProfileModal";
 
-const socket = io.connect("http://localhost:5000");
+// 1. Check local storage BEFORE connecting to the socket
+const getOrGenerateId = () => {
+  let id = localStorage.getItem("helloChatId");
+  if (!id) {
+    id = Math.random().toString(36).substring(2, 8).toUpperCase();
+    localStorage.setItem("helloChatId", id);
+  }
+  return id;
+};
+
+const myPersistentId = getOrGenerateId();
+
+// 2. Pass the ID to the server during the initial handshake
+const socket = io.connect("http://localhost:5000", {
+  query: { userId: myPersistentId },
+});
 
 function App() {
-  const [myId, setMyId] = useState("");
+  const [myId] = useState(myPersistentId);
   const [connections, setConnections] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
   const [messages, setMessages] = useState({});
+  const [onlineUsers, setOnlineUsers] = useState(new Set()); // Tracks green dots
 
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
-  // New State Features
-  const [localProfiles, setLocalProfiles] = useState({}); // { id: { nickname: '', avatar: '' } }
-  const [unreadCounts, setUnreadCounts] = useState({}); // { id: count }
-
+  const [localProfiles, setLocalProfiles] = useState({});
+  const [unreadCounts, setUnreadCounts] = useState({});
   const [pages, setPages] = useState({});
   const [hasMore, setHasMore] = useState({});
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
-  // Use a ref for active chat so the socket listener always knows exactly where you are
   const activeChatRef = useRef(activeChat);
+
+  // Load existing connections from localStorage on boot
+  useEffect(() => {
+    const loadSavedData = async () => {
+      const savedConnections = JSON.parse(
+        localStorage.getItem("helloChatConnections") || "[]",
+      );
+      const savedProfiles = JSON.parse(
+        localStorage.getItem("helloChatProfiles") || "{}",
+      );
+      setConnections(savedConnections);
+      setLocalProfiles(savedProfiles);
+    };
+
+    loadSavedData();
+  }, []);
+
+  // Save connections and profiles whenever they change
+  useEffect(() => {
+    localStorage.setItem("helloChatConnections", JSON.stringify(connections));
+  }, [connections]);
+
+  useEffect(() => {
+    localStorage.setItem("helloChatProfiles", JSON.stringify(localProfiles));
+  }, [localProfiles]);
 
   useEffect(() => {
     activeChatRef.current = activeChat;
-
-    // Clear unread count when you open a chat (wrapped in async for the linter)
     const clearUnread = async () => {
       if (activeChat) {
         setUnreadCounts((prev) => ({ ...prev, [activeChat]: 0 }));
       }
     };
-
     clearUnread();
   }, [activeChat]);
 
   useEffect(() => {
-    socket.on("your_id", (id) => setMyId(id));
+    // 3. Listen for the live list of online users from the server
+    socket.on("active_users", (usersArray) => {
+      setOnlineUsers(new Set(usersArray));
+    });
 
     socket.on("receive_message", (data) => {
       const { senderId, text } = data;
@@ -60,7 +98,6 @@ function App() {
         [senderId]: [...(prev[senderId] || []), { text, isMe: false }],
       }));
 
-      // If we are NOT currently looking at this chat, increment unread badge
       if (activeChatRef.current !== senderId) {
         setUnreadCounts((prev) => ({
           ...prev,
@@ -70,10 +107,42 @@ function App() {
     });
 
     return () => {
-      socket.off("your_id");
+      socket.off("active_users");
       socket.off("receive_message");
     };
   }, []);
+
+  // Handle Private Presence Subscriptions
+  useEffect(() => {
+    // 1. Extract just the IDs from your connections array
+    const targetIds = connections.map((c) => c.id);
+
+    if (targetIds.length > 0) {
+      // 2. Tell the server who we want to watch, and get who is online right now
+      socket.emit("subscribe_presence", targetIds, (currentlyOnline) => {
+        setOnlineUsers(new Set(currentlyOnline));
+      });
+    }
+
+    // 3. Listen for live updates when contacts open/close their tabs
+    const handlePresenceUpdate = ({ userId, status }) => {
+      setOnlineUsers((prev) => {
+        const newSet = new Set(prev);
+        if (status === "online") {
+          newSet.add(userId);
+        } else {
+          newSet.delete(userId);
+        }
+        return newSet;
+      });
+    };
+
+    socket.on("presence_update", handlePresenceUpdate);
+
+    return () => {
+      socket.off("presence_update", handlePresenceUpdate);
+    };
+  }, [connections]); // Re-run this if we add a new connection!
 
   const fetchChatHistory = useCallback(
     async (targetId, page) => {
@@ -103,16 +172,14 @@ function App() {
       }
     },
     [myId],
-  ); // The function now legally depends on myId
+  );
 
-  // 2. Use an inner async function to prevent synchronous state updates
   useEffect(() => {
     const loadInitialChat = async () => {
       if (activeChat && !messages[activeChat]) {
         await fetchChatHistory(activeChat, 1);
       }
     };
-
     loadInitialChat();
   }, [activeChat, messages, fetchChatHistory]);
 
@@ -160,6 +227,7 @@ function App() {
         openModal={() => setIsAddModalOpen(true)}
         localProfiles={localProfiles}
         unreadCounts={unreadCounts}
+        onlineUsers={onlineUsers}
       />
       <ChatWindow
         activeChat={activeChat}

@@ -186,3 +186,22 @@ body {
   border-color: #4f46e5;
   background-color: #374151;
 }
+
+.status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  border: 2px solid #1F2937;
+  transition: background-color 0.3s ease; /* Smooth fade effect */
+}
+
+.status-dot.online {
+  background-color: #10B981; /* Emerald Green */
+}
+
+.status-dot.offline {
+  background-color: #4B5563; /* Muted Grey */
+}
